@@ -86,6 +86,17 @@ otherwise.
   `scripts/` for runnable tools. Don't duplicate this pattern in other
   skills without a clear reason.
 
+## Content rules
+
+### LinkedIn posts (personal brand)
+
+- Voice: senior iOS engineer certifying skills. Never beginner tutorials, never app
+  promotion.
+- Keep posts concise, not over-detailed. Topics must reflect the current iOS release era:
+  check with WebSearch before writing.
+- Every post needs an image. Any terminal or screenshot must be blurred.
+- Publora can schedule up to 7 days ahead. Scheduling the same day is allowed.
+
 ## .claude/skills mirror
 
 - `.claude/skills/<name>` is a **relative symlink** to `../../skills/<name>`, one per
