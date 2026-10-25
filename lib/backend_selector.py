@@ -246,6 +246,60 @@ def publish(
     target_url: str,
     **kwargs: Any,
 ) -> Optional[dict]:
+    """Dispatch a draft to the active backend, optionally gated by the approval queue.
+
+    Without `approved_hash` this is exactly `_dispatch`: nothing changes for
+    existing callers, unless LINKEDIN_SKILLS_REQUIRE_APPROVAL=1 is set, which
+    refuses every call that has no hash (reshare included: it is outside the
+    queue's v1, so it raises ApprovalError there).
+
+    With `approved_hash=<hash>` (from `lib.approval_queue`) the call is sent
+    only if that hash belongs to an *approved* item and the hash recomputed from
+    this very call (kind, network, every destination account, target, post_urn,
+    parent_comment, reaction_type, text, scheduled_time, media_urls) equals it.
+    A kwarg the hash does not cover is refused. The item is moved to `sending`
+    under a file lock BEFORE the dispatch and only the caller that made that
+    move dispatches, so one approval sends once. The outcome is then written as
+    sent / failed / unknown (any exception, KeyboardInterrupt included, leaves
+    at worst `unknown`, which blocks resend until a human reconciles it).
+    Refusals raise `ApprovalError` / `ApprovalMismatch` and send nothing.
+    """
+    from . import approval_queue
+
+    approved_hash = kwargs.pop("approved_hash", None)
+    if approved_hash is None:
+        if approval_queue.approval_required():
+            raise approval_queue.ApprovalError(
+                f"{approval_queue.ENV_REQUIRE} is set: publish needs an approved_hash "
+                "(enqueue the draft and have a human approve it with "
+                "`python3 scripts/approval_queue.py review`). "
+                + ("A reshare is outside the queue's v1 and cannot be sent while this is set."
+                   if kind == "reshare" else "")
+            )
+        return _dispatch(kind, draft_text, target_url, **kwargs)
+
+    item = approval_queue.claim_for_send(
+        approved_hash, kind=kind, draft_text=draft_text, target_url=target_url,
+        require_account=active_backend() != "manual", **kwargs,
+    )
+    try:
+        # One attempt per approval: the client may only repeat a POST that was
+        # certainly not processed (429, or no connection was ever made).
+        with approval_queue.single_attempt():
+            result = _dispatch(kind, draft_text, target_url, **kwargs)
+    except BaseException as exc:
+        approval_queue.record_outcome(item["id"], error=exc)
+        raise
+    approval_queue.record_outcome(item["id"], result=result)
+    return result
+
+
+def _dispatch(
+    kind: PublishKind,
+    draft_text: str,
+    target_url: str,
+    **kwargs: Any,
+) -> Optional[dict]:
     """Dispatch a draft to the active backend.
 
     One call replaces the 10-line "On approval — adapt to the active backend"

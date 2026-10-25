@@ -29,34 +29,71 @@ from typing import Any, Optional
 
 import requests
 
+from . import approval_queue
 from ._env import load_env
 
 
 class PubloraError(RuntimeError):
-    pass
+    """A Publora call failed.
+
+    `status_code` is the HTTP status when the API answered, else None.
+    `request_sent` is False when the error was raised before anything left this
+    machine (missing key, local validation), so nothing can have been published.
+    The approval queue classifies outcomes from these two fields, not from the
+    message text.
+    """
+
+    def __init__(self, message: str = "", *, status_code: Optional[int] = None,
+                 request_sent: bool = True):
+        super().__init__(message)
+        self.status_code = status_code
+        self.request_sent = request_sent
 
 
 RETRYABLE_STATUSES = {408, 429, 500, 502, 503, 504}
 
 
+def _never_connected(exc: BaseException) -> bool:
+    """True when the request certainly never reached the server: the connect
+    timed out, or the connection was refused / the name did not resolve."""
+    if isinstance(exc, requests.ConnectTimeout):
+        return True
+    if isinstance(exc, requests.ConnectionError):
+        from urllib3.exceptions import NewConnectionError
+
+        inner = exc.args[0] if exc.args else None
+        return isinstance(getattr(inner, "reason", inner), NewConnectionError)
+    return False
+
+
 def _retry(attempts: int = 3, base_delay: float = 0.6):
     """Retry decorator for HTTP methods. Triggers on 408/429/5xx and on
-    transient network errors. Exponential backoff with jitter."""
+    transient network errors. Exponential backoff with jitter.
+
+    Inside `approval_queue.single_attempt()` (a call that passed the approval
+    gate) a POST is repeated only when it was certainly not processed: HTTP 429,
+    or no connection was ever made. A 5xx, 408, timeout or dropped connection may
+    have created the post, so it is raised at once and the caller records the
+    outcome as unknown. Outside the gate the behaviour is unchanged."""
 
     def decorator(fn):
         def wrapper(*args, **kwargs):
+            gated = approval_queue.single_attempt_active()
             last_exc: Optional[Exception] = None
             for attempt in range(attempts):
                 try:
                     return fn(*args, **kwargs)
                 except PubloraError as e:
-                    msg = str(e)
-                    retryable = any(f"HTTP {s}" in msg for s in RETRYABLE_STATUSES)
+                    if gated:
+                        retryable = e.status_code == 429
+                    else:
+                        msg = str(e)
+                        retryable = any(f"HTTP {s}" in msg for s in RETRYABLE_STATUSES)
                     if not retryable or attempt == attempts - 1:
                         raise
                     last_exc = e
                 except (requests.ConnectionError, requests.Timeout) as e:
-                    if attempt == attempts - 1:
+                    if (gated and not _never_connected(e)) or attempt == attempts - 1:
                         raise
                     last_exc = e
                 time.sleep(base_delay * (2**attempt) + random.uniform(0, 0.25))
@@ -77,7 +114,8 @@ class PubloraClient:
 
         if not self.api_key:
             raise PubloraError(
-                "PUBLORA_API_KEY not set. Export it or pass api_key= explicitly."
+                "PUBLORA_API_KEY not set. Export it or pass api_key= explicitly.",
+                request_sent=False,
             )
         self.timeout = timeout
         self._session = requests.Session()
@@ -112,7 +150,7 @@ class PubloraClient:
             Publora response dict with `comment.id`, `comment.commentUrn`, etc.
         """
         if len(message) > 1250:
-            raise PubloraError("message exceeds 1,250 char LinkedIn limit")
+            raise PubloraError("message exceeds 1,250 char LinkedIn limit", request_sent=False)
         payload = {
             "postedId": post_urn,
             "message": message,
@@ -344,5 +382,5 @@ class PubloraClient:
                 body = r.json()
             except Exception:
                 body = {"error": r.text[:500]}
-            raise PubloraError(f"HTTP {r.status_code}: {body}")
+            raise PubloraError(f"HTTP {r.status_code}: {body}", status_code=r.status_code)
         return r.json()

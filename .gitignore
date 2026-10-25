@@ -21,3 +21,10 @@ testing/
 # Eval run archives: transcripts are model output on fixtures, useful locally,
 # noise in git. Keep grading.json if a run is worth citing; add it explicitly.
 evals/runs/*/transcripts.json
+
+# personal data (fork-local). references/voice-profile.md and
+# references/story-bank.md stay tracked as blank templates; keep your filled
+# copies out of commits with: git update-index --skip-worktree <file>
+plans/
+imagens/
+.maestri/
