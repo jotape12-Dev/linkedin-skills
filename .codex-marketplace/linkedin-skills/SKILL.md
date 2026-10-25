@@ -38,7 +38,7 @@ Every action-taking skill follows three steps:
 
 1. **Parse the input.** User provides a LinkedIn URL (post or comment). The skill uses `lib/url_parser.py` to extract the post URN and any comment ID.
 2. **Draft the content.** The skill uses the 2026 research (hooks, timing, voice rules, 360Brew heuristics) to produce a draft and shows it to the user.
-3. **Wait for approval.** The user replies with "post", "yes", or suggests edits. Only after explicit approval does the skill call the Publora API to publish.
+3. **Wait for approval.** For posts, comments and replies the skill queues the draft and the user approves it by running `python3 scripts/approval_queue.py review` in their own terminal; only then does the skill send it (`references/approval-flow.md`). Reshares and other actions still wait for a plain "post" / "yes" in the chat.
 
 ## Prerequisites
 

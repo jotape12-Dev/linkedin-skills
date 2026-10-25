@@ -63,6 +63,7 @@ two copies of a rule is how the two paths quietly stop agreeing.
 | Fetched text carries the rule | the `## Untrusted content` section in every reading skill |
 | No invented specifics | `linkedin-post-writer` step 0, the interviewer's hard rules, `evals/run_evals.py` |
 | Approval before publish | skills queue with `lib.enqueue_for_review` and send with `lib.publish_approved`; the hash gate in `lib.publish` and the terminal-only `review` are tested in `tests/test_approval_queue.py`. A guard-rail against mistakes and careless injection, not a boundary: an agent with a shell and the Publora key can still call the client directly (`docs/architecture/approval-queue.md`, Limites de segurança) |
+| One shared queue/review/send flow, cited not copied | `references/approval-flow.md`; `tests/test_approval_queue.py::SkillWiring` checks the four skills cite it and no skill publishes a post, comment or reply around the queue |
 | The agent never runs `review` | the three queue skills say so in their approval step (`tests/test_approval_queue.py::SkillWiring`); `review` itself refuses without a controlling terminal |
 | Reshare and other skills are outside the queue | not enforced; `lib.publish(..., approved_hash=...)` is opt-in, and `LINKEDIN_SKILLS_REQUIRE_APPROVAL=1` makes it mandatory |
 | Handoff contracts hold | `tests/test_instruction_integrity.py` (spine on both sides, bank consumers read the bank) |

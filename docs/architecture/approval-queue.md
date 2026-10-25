@@ -185,7 +185,7 @@ Fluxo: `pending -> approved -> sending -> sent | failed | unknown` (+ `rejected`
 
 ## C. O hash cobre o que é entregue (B3, M1)
 
-- `accounts` = **lista efetiva completa** resolvida antes de enfileirar (`resolve_accounts(kind, platform_id=, platforms=)`, espelha `_dispatch`: post vai para `platforms` ou `[platform_id|LINKEDIN_PLATFORM_ID]`; comment/reply para `platform_id|LINKEDIN_PLATFORM_ID`). Ordem não importa. Conta não resolvida em backend não-manual => recusa.
+- `accounts` = **lista efetiva completa** resolvida antes de enfileirar (`resolve_accounts(kind, platform_id=, platforms=)`, espelha `_dispatch`: post vai para `platforms` ou `[platform_id|LINKEDIN_PLATFORM_ID]`; comment/reply para `platform_id|LINKEDIN_PLATFORM_ID`). Ordem não importa. Conta não resolvida => recusa **só no backend publora** (lá o destino precisa ser conhecido); em diy e manual a lista pode ser vazia (o poster do usuário escolhe o destino, ou nada é enviado) e entra no hash como `[]`.
 - Entram no hash: kind, network, accounts, target, post_urn, parent_comment, **reaction_type**, texto (NFC, `\n`), horário (UTC), mídia (ordem importa). `HASH_VERSION = "v2"`.
 - **Allowlist de kwargs** por kind (`ALLOWED_KWARGS`); qualquer outro kwarg com valor não-None => `ApprovalError` ("not covered"). `network != linkedin` => recusa (não há adaptador).
 - `parent_comment` só existe em `reply`: enqueue exige, o gate recalcula com o mesmo valor, e um `comment` com `parent_comment` é recusado (nos dois lados).
@@ -219,3 +219,8 @@ A fila é um **guard-rail contra erro e contra injeção descuidada** (texto tro
 Fronteira real exige que a credencial de publicação (`PUBLORA_API_KEY`, token do LinkedIn) fique **fora do alcance do agente** (outro usuário/processo/serviço que só publica itens aprovados), com a aprovação vindo de um canal que o agente não controla. Não implementado na v1.
 
 Retry (v1.2): atrás do gate (`approved_hash`) o cliente não repete POST após 5xx/408/timeout/conexão caída; só repete em 429 e quando nenhuma conexão chegou a ser feita. O desfecho vai para `unknown`. Nenhum `idempotencyKey` é enviado (suporte no REST: DESCONHECIDO). Sem gate, o retry é o de antes.
+
+## Pendências conhecidas
+
+- **M4, validade da aprovação (TTL):** não implementado. Um item aprovado continua `approved` indefinidamente e `publish_approved` o envia mesmo semanas depois, com o contexto (horário, notícia, thread) já velho. Proposta: carimbar `approved_at` e recusar `claim_for_send` após N horas, com um novo `review`. Decisão de N e de expirar para `expired` ou voltar a `pending`: do usuário.
+- Fluxo compartilhado entre as skills (ramos de duplicata, `ApprovalError` por status, exceção no meio do lote, edição de item enfileirado): `references/approval-flow.md`.

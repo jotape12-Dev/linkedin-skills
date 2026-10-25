@@ -757,46 +757,131 @@ class AgentHelpers(GateCase):
             backend_selector.publish_approved(a["id"])
         self.assertEqual(self.dispatch.call_count, 1)
 
+    def test_diy_and_manual_tiers_take_an_empty_account_list(self):
+        """No account configured is a normal state for these tiers. Only publora
+        needs the destination known before it sends."""
+        for tier in ("diy", "manual"):
+            with self.subTest(tier=tier), mock.patch.object(backend_selector, "active_backend",
+                                                            return_value=tier):
+                self.dispatch.reset_mock()
+                for kind, kw in (("post", {}), ("comment", {"post_urn": "urn:li:share:1"})):
+                    item = backend_selector.enqueue_for_review(kind, f"Text {tier} {kind}.", "https://t/", **kw)
+                    self.assertEqual(item["accounts"], [])
+                    human_approves(item)
+                    backend_selector.publish_approved(item["id"])
+                self.assertEqual(self.dispatch.call_count, 2)
+
+    def test_publora_still_refuses_an_empty_account_list(self):
+        item = backend_selector.enqueue_for_review("post", "No account.", "https://t/")
+        human_approves(item)
+        with self.assertRaises(q.ApprovalError):
+            backend_selector.publish_approved(item["id"])
+        self.dispatch.assert_not_called()
+
     def test_reshare_is_outside_the_queue(self):
         with self.assertRaises(q.ApprovalError):
             backend_selector.enqueue_for_review("reshare", "", "https://www.linkedin.com/feed/update/x/")
 
 
+class DiyRoundTrip(QueueCase):
+    """The real diy dispatch, with a harmless poster script, end to end."""
+
+    def test_enqueue_review_publish_through_a_custom_poster(self):
+        poster = Path(self.ledger.parent) / "poster.py"
+        out = Path(self.ledger.parent) / "got.json"
+        poster.write_text("import sys\nopen(sys.argv[0] + '.out', 'w', encoding='utf-8')"
+                          ".write(sys.stdin.read())\n", encoding='utf-8')
+        env = {"LINKEDIN_SKILLS_CUSTOM_POSTER": f"{sys.executable} {poster}"}
+        with mock.patch.dict(os.environ, env):
+            for var in ("PUBLORA_API_KEY", "LINKEDIN_PLATFORM_ID"):
+                os.environ.pop(var, None)
+            self.assertEqual(backend_selector.active_backend(), "diy")
+            item = backend_selector.enqueue_for_review("post", "Sent through my own poster.",
+                                                       "https://www.linkedin.com/post/new/")
+            self.assertEqual(item["accounts"], [])
+            with self.assertRaises(q.ApprovalError):  # not reviewed yet
+                backend_selector.publish_approved(item["id"])
+            human_approves(item)
+            result = backend_selector.publish_approved(item["id"])
+        self.assertEqual((result["mode"], result["returncode"]), ("diy", 0))
+        self.assertEqual(q.get(item["id"])["status"], "sent")
+        import json
+        got = json.loads(Path(str(poster) + ".out").read_text(encoding="utf-8"))
+        self.assertEqual(got["draft_text"], "Sent through my own poster.")
+        self.assertNotIn("approved_hash", got)
+
+
 class SkillWiring(unittest.TestCase):
-    """The three writing skills use the queue and tell the human to review.
-    A skill is a prompt, so this is the only enforcement there is for the
+    """The writing skills use the queue and tell the human to review. A skill is
+    a prompt, so reading its text is the only enforcement there is for the
     sentence 'never run review yourself'."""
 
-    SKILLS = {"linkedin-post-writer": "post", "linkedin-comment-drafter": "comment",
-              "linkedin-reply-handler": "reply"}
+    SKILLS = {"linkedin-post-writer": "post", "linkedin-repurposer": "post",
+              "linkedin-comment-drafter": "comment", "linkedin-reply-handler": "reply"}
+    CITATION = "../../references/approval-flow.md"
+    #: lib.publish with a kind the queue covers, anywhere a skill could write it.
+    COVERED_PUBLISH = re.compile(
+        r"""lib\.publish\(\s*(?:kind\s*=\s*)?["'](?:post|comment|reply)["']""")
+    #: wording that would hand approval to the agent or the chat.
+    FORBIDDEN = ("lib.approval_queue.review_on_tty", "approval_queue.py approve",
+                 "approved_hash=<", "On approval. Call `lib.publish",
+                 "On approval.** Publish via `lib.publish")
+
+    def documents(self):
+        docs = sorted((q.ROOT / "skills").rglob("*.md")) + [q.ROOT / "SKILL.md"]
+        return [(p, p.read_text(encoding="utf-8")) for p in docs]
 
     def text(self, name):
         return (q.ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
 
-    def test_each_skill_queues_then_publishes_approved(self):
+    def test_each_queue_skill_queues_cites_the_flow_and_publishes_approved(self):
         for name, kind in self.SKILLS.items():
             body = self.text(name)
             self.assertIn(f'lib.enqueue_for_review(kind="{kind}"', body, name)
             self.assertIn("lib.publish_approved(", body, name)
-            self.assertIn("python3 scripts/approval_queue.py review", body, name)
-            self.assertRegex(body, r"[Nn]ever run `review`", name)
+            self.assertIn(self.CITATION, body, name)
+            self.assertRegex(body, r"never run `review` yourself", name)
 
-    def test_no_skill_publishes_a_post_comment_or_reply_around_the_queue(self):
-        for name, kind in self.SKILLS.items():
-            self.assertNotIn(f'lib.publish(kind="{kind}"', self.text(name), name)
+    def test_no_skill_anywhere_publishes_a_covered_kind_around_the_queue(self):
+        for path, body in self.documents():
+            self.assertIsNone(self.COVERED_PUBLISH.search(body), str(path))
 
-    def test_no_skill_tells_the_agent_to_approve(self):
-        for path in (q.ROOT / "skills").rglob("*.md"):
-            body = path.read_text(encoding="utf-8")
-            self.assertNotIn("lib.approval_queue.review_on_tty", body, str(path))
+    def test_no_skill_uses_wording_that_hands_approval_to_the_agent(self):
+        for path, body in self.documents():
+            for phrase in self.FORBIDDEN:
+                self.assertNotIn(phrase, body, f"{path}: {phrase}")
+
+    def test_the_flow_is_written_once(self):
+        """The prose lives in the reference; a skill that repeats it drifts."""
+        flow = (q.ROOT / "references" / "approval-flow.md").read_text(encoding="utf-8")
+        for needle in ("duplicate", "ApprovalError", "reconcile", "terminal wins",
+                       "edit(", "may have been sent", "Stop."):
+            self.assertIn(needle, flow, needle)
+        for name in self.SKILLS:
+            self.assertNotIn("terminal wins", self.text(name), name)
 
     def test_reshare_keeps_working_outside_the_queue(self):
         self.assertIn("lib.repost(", self.text("linkedin-comment-drafter"))
 
     def test_precedence_lists_the_queue_rules(self):
         body = (q.ROOT / "references" / "precedence.md").read_text(encoding="utf-8")
-        self.assertIn("enqueue_for_review", body)
-        self.assertIn("never runs `review`", body.replace("\n", " ").replace("  ", " "))
+        flat = " ".join(body.split())
+        self.assertIn("enqueue_for_review", flat)
+        self.assertIn("never runs `review`", flat)
+        self.assertIn("approval-flow.md", flat)
+
+    def test_agents_md_carries_the_precedence_paragraph(self):
+        for name in ("CLAUDE.md", "AGENTS.md"):
+            body = " ".join((q.ROOT / name).read_text(encoding="utf-8").split())
+            self.assertIn("references/precedence.md` is the resolution order", body, name)
+            self.assertIn("references/approval-flow.md` is the one copy", body, name)
+
+    def test_the_approval_flow_example_calls_exist(self):
+        import lib
+        flow = (q.ROOT / "references" / "approval-flow.md").read_text(encoding="utf-8")
+        for fn in re.findall(r"lib\.([a-z_]+)\(", flow):
+            self.assertTrue(hasattr(lib, fn), fn)
+        self.assertTrue(hasattr(q, "edit") and hasattr(q, "get"))
 
 
 @unittest.skipUnless(HAVE_REQUESTS, "needs requests")

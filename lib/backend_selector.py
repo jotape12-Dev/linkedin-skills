@@ -280,7 +280,7 @@ def publish(
 
     item = approval_queue.claim_for_send(
         approved_hash, kind=kind, draft_text=draft_text, target_url=target_url,
-        require_account=active_backend() != "manual", **kwargs,
+        require_account=active_backend() == "publora", **kwargs,
     )
     try:
         # One attempt per approval: the client may only repeat a POST that was

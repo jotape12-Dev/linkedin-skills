@@ -151,7 +151,7 @@ Once installed, just ask Claude Code or Codex for help with LinkedIn. The right 
 **Remove AI tells from any text:**
 > "Humanize this text: [paste AI-generated draft]"
 
-Every skill shows you a draft first and waits for your OK before doing anything. Nothing gets posted without your approval.
+Every skill shows you a draft first and waits for your OK before doing anything. Nothing gets posted without your approval. For posts, comments and replies that OK is a terminal step: the skill queues the draft and you approve the exact text with `python3 scripts/approval_queue.py review`; a "yes" in the chat does not publish it.
 
 ## The 12 skills
 

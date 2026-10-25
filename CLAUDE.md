@@ -67,7 +67,8 @@ otherwise.
   When a sender needs the receiver's rules to change, change the receiver and cite
   it from both; two copies of a rule is how two paths quietly stop agreeing.
   Adding a rule anywhere means adding its row to the enforcement table there, or
-  admitting in the row that nothing enforces it yet.
+  admitting in the row that nothing enforces it yet. The approval flow follows
+  this: `references/approval-flow.md` is the one copy, and the skills cite it.
 - Canonical voice rules live at root `references/voice-rules.md`.
   Skill-local "Hard rules" sections must only contain skill-specific
   overrides (char ranges, threading rules, format constraints) and start
