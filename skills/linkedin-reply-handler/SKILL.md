@@ -40,7 +40,7 @@ Either shape works:
 - A filtered roster: how many comments were fetched, how many were filtered out and why, how many drafts follow
 - One reply draft per comment worth replying to (150-300 chars each), each tagged with its target comment, the correct `parentComment` URN, and a reaction suggestion
 - A single batch approval card covering every draft
-- On approval, posts all of them (reaction + reply, per comment)
+- Once the user has approved them at the terminal, posts the approved ones (reaction + reply, per comment)
 
 ## Steps — single comment
 
@@ -53,8 +53,8 @@ Either shape works:
 3. **Read the full context.** Author post text, top-level comment text, any intermediate replies. Include the user's own prior comment if they're in the thread.
 4. **Draft the reply.** Follow the engagement templates in `references/reply-templates.md`. If the counterpart asked a question, answer it directly. If they pushed back, concede then sharpen.
 5. **Humanizer pass.** Scrub 2026 AI vocab by density, cap em dashes (about one per 100 words), fix only machine-flat rhythm and never manufacture sentence-length variance. Canonical rules: `linkedin-humanizer` V3.
-6. **Approval card.** Include thread preview (who said what in last 3 turns), the draft, reaction suggestion, and the parentComment URN we'll send.
-7. **On approval.** Call `lib.publish(kind="reply", draft_text=<approved>, target_url=<comment_url>, post_urn=<urn>, platform_id=<id>, parent_comment=<top_level_comment_urn>, reaction_type=<chosen>)`. The wrapper handles Publora / manual / diy routing.
+6. **Queue the draft and show the card.** Call `lib.enqueue_for_review(kind="reply", text=<draft>, target_url=<comment_url>, post_urn=<urn>, platform_id=<id>, parent_comment=<top_level_comment_urn>, reaction_type=<chosen>)`; it sends nothing. Card: thread preview (who said what in last 3 turns), the draft, reaction suggestion, the parentComment URN we'll send, and the item `id`. Then tell the user to run `python3 scripts/approval_queue.py review` in their own terminal and reply when done. **Never run `review` yourself**; "yes" in the chat does not approve a queued item.
+7. **After they approve.** Call `lib.publish_approved(<id>)`. It re-checks the text, the parentComment URN and the account against what was approved, so a wrong parent cannot slip in after the card. `ApprovalError` means not approved or changed: report it, do not retry. Publora / manual / diy routing is unchanged.
 
 ## Steps — whole thread
 
@@ -67,8 +67,8 @@ Same voice-profile-first rule applies. Then:
 5. **Draft each remaining reply.** For every surviving queue entry, follow the same `references/reply-templates.md` templates as single-comment mode (R1 Answer-Their-Question, R2 Concede-Then-Sharpen, R3 Extend-Their-Thesis, R4 Share-Lived-Experience, R5 Ask-Back). Read the surrounding thread (the top-level comment plus any prior replies) for context before drafting a reply to a nested reply.
 6. **Compute the parentComment URN for each draft.** Use `lib.url_parser.build_parent_comment_urn(post_urn, top_level_comment_id)` — always the TOP-level comment's id, never an intermediate reply's id, per the flattening gotcha below. Sweeping many comments at once makes it easy to mix up which id is "top-level" — double check each entry's `top_level_comment_id` before building its URN.
 7. **Humanizer pass.** Same scrub as single-comment mode, run per draft.
-8. **One batch approval card.** Present every surviving draft together: for each, the commenter's name, a short quote of what they said, the drafted reply, the reaction suggestion, and the parentComment URN. Show the filter summary from step 4 above the drafts so the user can sanity-check what got skipped. Wait for one explicit approval — the user can approve all, or call out specific ones to skip or edit.
-9. **On approval, publish each one.** For each approved draft, call `lib.publish(...)` the same way single-comment mode does. React before replying on each comment. If the user approved only some drafts, publish only those.
+8. **Queue every draft, one batch card.** Call `lib.enqueue_for_review(kind="reply", ...)` once per surviving draft (same arguments as single mode). Present every draft together: for each, the commenter's name, a short quote of what they said, the drafted reply, the reaction suggestion, the parentComment URN and the item `id`. Show the filter summary from step 4 above the drafts so the user can sanity-check what got skipped. Then tell the user to run `python3 scripts/approval_queue.py review` in their own terminal: they approve, reject or skip each reply in one pass and confirm once. **Never run `review` yourself.**
+9. **After they approve, publish each approved one.** For each queued id call `lib.publish_approved(<id>)`, one at a time (see the pacing rule below). An `ApprovalError` for an id means the user skipped or rejected it, or it changed: leave it, say which ones were not sent, do not retry. Reaction and reply go out together per comment.
 
 ## The flattening gotcha (both modes)
 

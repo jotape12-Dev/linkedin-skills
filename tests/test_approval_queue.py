@@ -700,6 +700,105 @@ class ErrorClassification(GateCase):
             self.assertEqual(q.get(item["id"])["status"], want, status)
 
 
+class AgentHelpers(GateCase):
+    """lib.enqueue_for_review / lib.publish_approved: what the skills call."""
+
+    def test_enqueue_sends_nothing_and_resolves_the_account(self):
+        with mock.patch.dict(os.environ, {"LINKEDIN_PLATFORM_ID": "linkedin-env"}):
+            item = backend_selector.enqueue_for_review("post", "Hello.", POST["target"])
+        self.assertEqual((item["status"], item["accounts"]), ("pending", ["linkedin-env"]))
+        self.dispatch.assert_not_called()
+
+    def test_a_pending_item_is_not_published(self):
+        item = backend_selector.enqueue_for_review("post", "Hello.", POST["target"], platforms=[ACCT])
+        with self.assertRaises(q.ApprovalError) as ctx:
+            backend_selector.publish_approved(item["id"])
+        self.assertIn("approval_queue.py review", str(ctx.exception))
+        with self.assertRaises(q.ApprovalError):
+            backend_selector.publish_approved("nope")
+        self.dispatch.assert_not_called()
+
+    def test_each_kind_round_trips_through_the_gate(self):
+        cases = [
+            ("post", "Hello.", POST["target"], dict(platforms=[ACCT], scheduled_time="2026-11-03T13:00:00Z",
+                                                    media_urls=["https://img/1.png"])),
+            ("comment", "Nice.", COMMENT["target"], dict(post_urn="urn:li:share:1", platform_id=ACCT,
+                                                         reaction_type="LIKE")),
+            ("reply", "Thanks!", REPLY["target"], dict(post_urn="urn:li:share:1", platform_id=ACCT,
+                                                       parent_comment=REPLY["parent_comment"],
+                                                       reaction_type="INTEREST")),
+        ]
+        for kind, text, target, kw in cases:
+            with self.subTest(kind=kind):
+                self.dispatch.reset_mock()
+                item = backend_selector.enqueue_for_review(kind, text, target, **kw)
+                human_approves(item)
+                backend_selector.publish_approved(item["id"])
+                self.dispatch.assert_called_once()
+                args, sent = self.dispatch.call_args
+                self.assertEqual((args[0], args[1], args[2]), (kind, text, target))
+                self.assertEqual(q.get(item["id"])["status"], "sent")
+
+    def test_an_edit_after_approval_blocks_publish_approved(self):
+        item = backend_selector.enqueue_for_review("post", "Hello.", POST["target"], platforms=[ACCT])
+        human_approves(item)
+        q.edit(item["id"], text="Changed after approval.")
+        with self.assertRaises(q.ApprovalError):
+            backend_selector.publish_approved(item["id"])
+        self.dispatch.assert_not_called()
+
+    def test_the_same_draft_is_not_queued_twice_and_cannot_send_twice(self):
+        a = backend_selector.enqueue_for_review("post", "Hello.", POST["target"], platforms=[ACCT])
+        b = backend_selector.enqueue_for_review("post", "Hello.", POST["target"], platforms=[ACCT])
+        self.assertTrue(b["duplicate"])
+        human_approves(a)
+        backend_selector.publish_approved(a["id"])
+        with self.assertRaises(q.ApprovalError):
+            backend_selector.publish_approved(a["id"])
+        self.assertEqual(self.dispatch.call_count, 1)
+
+    def test_reshare_is_outside_the_queue(self):
+        with self.assertRaises(q.ApprovalError):
+            backend_selector.enqueue_for_review("reshare", "", "https://www.linkedin.com/feed/update/x/")
+
+
+class SkillWiring(unittest.TestCase):
+    """The three writing skills use the queue and tell the human to review.
+    A skill is a prompt, so this is the only enforcement there is for the
+    sentence 'never run review yourself'."""
+
+    SKILLS = {"linkedin-post-writer": "post", "linkedin-comment-drafter": "comment",
+              "linkedin-reply-handler": "reply"}
+
+    def text(self, name):
+        return (q.ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_each_skill_queues_then_publishes_approved(self):
+        for name, kind in self.SKILLS.items():
+            body = self.text(name)
+            self.assertIn(f'lib.enqueue_for_review(kind="{kind}"', body, name)
+            self.assertIn("lib.publish_approved(", body, name)
+            self.assertIn("python3 scripts/approval_queue.py review", body, name)
+            self.assertRegex(body, r"[Nn]ever run `review`", name)
+
+    def test_no_skill_publishes_a_post_comment_or_reply_around_the_queue(self):
+        for name, kind in self.SKILLS.items():
+            self.assertNotIn(f'lib.publish(kind="{kind}"', self.text(name), name)
+
+    def test_no_skill_tells_the_agent_to_approve(self):
+        for path in (q.ROOT / "skills").rglob("*.md"):
+            body = path.read_text(encoding="utf-8")
+            self.assertNotIn("lib.approval_queue.review_on_tty", body, str(path))
+
+    def test_reshare_keeps_working_outside_the_queue(self):
+        self.assertIn("lib.repost(", self.text("linkedin-comment-drafter"))
+
+    def test_precedence_lists_the_queue_rules(self):
+        body = (q.ROOT / "references" / "precedence.md").read_text(encoding="utf-8")
+        self.assertIn("enqueue_for_review", body)
+        self.assertIn("never runs `review`", body.replace("\n", " ").replace("  ", " "))
+
+
 @unittest.skipUnless(HAVE_REQUESTS, "needs requests")
 class SingleAttemptRetry(QueueCase):
     """Behind the gate a POST is never repeated unless it certainly was not

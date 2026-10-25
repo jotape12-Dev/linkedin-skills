@@ -26,7 +26,7 @@ A LinkedIn post URL in any of the standard shapes (see the top-level `SKILL.md` 
 - Pattern label (which of the 7 templates was used)
 - Estimated engagement fit based on what the author typically responds to
 
-Then waits for user approval. On "post", calls Publora to react + comment.
+Then waits for user approval. Once the user approves it at the terminal (`approval_queue.py review`), calls Publora to react + comment.
 
 ## Steps
 
@@ -39,8 +39,8 @@ Then waits for user approval. On "post", calls Publora to react + comment.
 3. **Detect the author's closing question.** If the post ends with a "?" line, the Answer-the-Closing-Question template usually wins.
 4. **Draft comment variants.** Pick 2-3 templates from `references/comment-templates.md` that fit the post's topic. Fill them with user-voice phrasing.
 5. **Run the humanizer pass.** Scrub 2026 AI vocab by paragraph density, cap em dashes (about one per 100 words, never swap one for a period), fix only machine-flat rhythm without manufacturing variance, and add an odd-precision number with a named referent if missing. Canonical rules: `linkedin-humanizer` V3.
-6. **Present drafts for approval** using `lib.approval.render_approval_card`. Include: target URL, each variant, reaction suggestion, a one-line "why this template fits".
-7. **On approval.** Call `lib.publish(kind="comment", draft_text=<approved>, target_url=<post_url>, post_urn=<urn>, platform_id=<id>, reaction_type=<chosen>)`. The wrapper handles Publora / manual / diy routing.
+6. **Queue the chosen draft and present it.** For the variant the user picks (queue only that one), call `lib.enqueue_for_review(kind="comment", text=<variant>, target_url=<post_url>, post_urn=<urn>, platform_id=<id>, reaction_type=<chosen>)`; it sends nothing. Show the card with `lib.approval.render_approval_card`: target URL, each variant, reaction suggestion, a one-line "why this template fits", and the queued item `id`. Then tell the user to run `python3 scripts/approval_queue.py review` in their own terminal and reply when done. **Never run `review` yourself**; "yes" in the chat does not approve a queued item.
+7. **After they approve.** Call `lib.publish_approved(<id>)`: the reaction and the comment go out together, and only if the text, post and account still match what was approved. `ApprovalError` means it was not approved or was changed: say so and ask them to review again, never retry around it. Publora / manual / diy routing is unchanged. Reshare mode below is outside the approval queue for now and keeps its own approval card.
 
 ## Reshare mode (repost with your thoughts)
 

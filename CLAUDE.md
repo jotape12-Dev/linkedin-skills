@@ -135,6 +135,15 @@ otherwise.
   `DELETE /delete-post/<postGroupId>`. Also `post-logs`, `test-connection`,
   `platform-limits` and `webhooks`. Prefer editing a scheduled post over
   delete-and-recreate.
+- **Approval queue (write layer, local):** `lib/approval_queue.py`, CLI
+  `scripts/approval_queue.py`. For posts, comments and replies the three writing
+  skills call `lib.enqueue_for_review(...)` (same arguments as `publish`) and,
+  after the user has run `python3 scripts/approval_queue.py review` in their own
+  terminal, `lib.publish_approved(<id>)`. The agent never runs `review`. The hash
+  gate (`publish(..., approved_hash=...)`) is opt-in per call; reshare is outside
+  it. It is a guard-rail, not a security boundary (see
+  `docs/architecture/approval-queue.md`). The ledger lives in `testing/` or
+  `LINKEDIN_SKILLS_QUEUE_PATH`, never in a tracked folder.
 - **Image layer (Pixfaro):** `lib/pixfaro_client.py`. Skills should call
   `lib.illustrate(prompt, kind=...)` / `lib.refine(image_id, instruction)`
   (or `lib.available_models()`), not the client directly. Endpoints:
