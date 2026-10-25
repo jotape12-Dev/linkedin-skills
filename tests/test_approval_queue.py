@@ -819,16 +819,32 @@ class SkillWiring(unittest.TestCase):
     SKILLS = {"linkedin-post-writer": "post", "linkedin-repurposer": "post",
               "linkedin-comment-drafter": "comment", "linkedin-reply-handler": "reply"}
     CITATION = "../../references/approval-flow.md"
-    #: lib.publish with a kind the queue covers, anywhere a skill could write it.
-    COVERED_PUBLISH = re.compile(
-        r"""lib\.publish\(\s*(?:kind\s*=\s*)?["'](?:post|comment|reply)["']""")
+    #: any call written as `publish(`, with or without `lib.` and whatever the
+    #: spacing. `unpublish(` and `publish_approved(` do not match.
+    PUBLISH_CALL = re.compile(r"(?<![\w])(?:lib\.)?publish\s*\(([^\n]{0,160})")
+
+    @classmethod
+    def around_the_queue(cls, text):
+        """publish( calls in a document that skip the queue. Allowed: a reshare,
+        and a mention of the opt-in `approved_hash` gate itself."""
+        bad = []
+        for m in cls.PUBLISH_CALL.finditer(text):
+            args = m.group(1)
+            if re.search(r"""["']reshare["']""", args) or "approved_hash" in args:
+                continue
+            bad.append(m.group(0))
+        return bad
+
     #: wording that would hand approval to the agent or the chat.
     FORBIDDEN = ("lib.approval_queue.review_on_tty", "approval_queue.py approve",
                  "approved_hash=<", "On approval. Call `lib.publish",
                  "On approval.** Publish via `lib.publish")
 
     def documents(self):
+        """Every skill document, the root SKILL.md and the shared references,
+        except the one that owns the flow."""
         docs = sorted((q.ROOT / "skills").rglob("*.md")) + [q.ROOT / "SKILL.md"]
+        docs += [p for p in sorted((q.ROOT / "references").glob("*.md")) if p.name != "approval-flow.md"]
         return [(p, p.read_text(encoding="utf-8")) for p in docs]
 
     def text(self, name):
@@ -842,9 +858,19 @@ class SkillWiring(unittest.TestCase):
             self.assertIn(self.CITATION, body, name)
             self.assertRegex(body, r"never run `review` yourself", name)
 
-    def test_no_skill_anywhere_publishes_a_covered_kind_around_the_queue(self):
+    def test_the_publish_pattern_catches_the_variants_and_spares_the_rest(self):
+        for text in ('lib.publish("post", t, u)', "publish('comment', t, u)", 'lib.publish (kind="reply", x)',
+                     'publish ("post", draft_text, target_url, media_urls=urls)', "lib.publish(kind, t, u)"):
+            self.assertTrue(self.around_the_queue(text), text)
+        for text in ('lib.unpublish(post_group_id=1)', "lib.publish_approved(7)", 'lib.publish("reshare", "", u)',
+                     "lib.publish(..., approved_hash=...)", "the publish step", "unpublish (x)"):
+            self.assertFalse(self.around_the_queue(text), text)
+
+    def test_no_markdown_calls_publish_around_the_queue(self):
+        """Skills, sub-skills, the root SKILL.md and shared references. A reshare
+        and the opt-in approved_hash gate are the documented exceptions."""
         for path, body in self.documents():
-            self.assertIsNone(self.COVERED_PUBLISH.search(body), str(path))
+            self.assertEqual(self.around_the_queue(body), [], str(path))
 
     def test_no_skill_uses_wording_that_hands_approval_to_the_agent(self):
         for path, body in self.documents():
@@ -875,6 +901,16 @@ class SkillWiring(unittest.TestCase):
             body = " ".join((q.ROOT / name).read_text(encoding="utf-8").split())
             self.assertIn("references/precedence.md` is the resolution order", body, name)
             self.assertIn("references/approval-flow.md` is the one copy", body, name)
+
+    def test_approval_queue_is_importable_from_lib_in_a_fresh_process(self):
+        """`lib.approval_queue.get` / `.edit` are cited in the skills; a fresh
+        interpreter must find them without anyone importing the module first."""
+        code = ("import sys; import lib; "
+                "assert 'requests' not in sys.modules, 'pulled in a third-party dependency'; "
+                "lib.approval_queue.get; lib.approval_queue.edit; print('ok')")
+        r = subprocess.run([sys.executable, "-c", code], cwd=q.ROOT, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"), r.stderr)
 
     def test_the_approval_flow_example_calls_exist(self):
         import lib

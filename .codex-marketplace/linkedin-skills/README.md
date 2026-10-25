@@ -293,7 +293,7 @@ Posts with a visual get more dwell time. The Post Writer can generate an illustr
 
 [Pixfaro](https://pixfaro.com) is a single image API over multiple models (from `flux-schnell` at $0.004 to `gpt-5-image`). It composites your handle, brand color, or logo onto the image as a **pixel-exact overlay**, so a cheap base model still renders crisp text on a quote-card or thumbnail. Pull those brand fields from your [Voice & Brand Profile](references/voice-profile.md) (section 6) and every asset stays on-brand.
 
-Setup: sign up at [api.pixfaro.com/signup](https://api.pixfaro.com/signup?ref=linkedin-skills), create a key (name it `linkedin`, scope **Generate**), and put `PIXFARO_TOKEN=pf_live_...` in `.env` **at the root of the `linkedin-skills` folder** (next to this README; keys are shown once). Then `python3 scripts/check_config.py` calls Pixfaro's `GET /v1/key` and prints the key's name and scope when it is right. The thin client at `lib/pixfaro_client.py` and the wrappers `lib.illustrate(prompt, kind=...)` / `lib.refine(image_id, instruction)` return a hosted URL that flows straight into `lib.publish(..., media_urls=[url])`. `refine` edits a prior image by its id (cheaper than regenerating); results carry `cost`, `balance_after`, and a `premium` flag so the skills never quietly spend on a pricey model.
+Setup: sign up at [api.pixfaro.com/signup](https://api.pixfaro.com/signup?ref=linkedin-skills), create a key (name it `linkedin`, scope **Generate**), and put `PIXFARO_TOKEN=pf_live_...` in `.env` **at the root of the `linkedin-skills` folder** (next to this README; keys are shown once). Then `python3 scripts/check_config.py` calls Pixfaro's `GET /v1/key` and prints the key's name and scope when it is right. The thin client at `lib/pixfaro_client.py` and the wrappers `lib.illustrate(prompt, kind=...)` / `lib.refine(image_id, instruction)` return a hosted URL that flows straight into `lib.enqueue_for_review("post", ..., media_urls=[url])` (then `lib.publish_approved` once you have reviewed it). `refine` edits a prior image by its id (cheaper than regenerating); results carry `cost`, `balance_after`, and a `premium` flag so the skills never quietly spend on a pricey model.
 
 For **text-led visuals** (a quote-card of your hook), the skills skip the image model entirely and use Pixfaro's design templates: `lib.quote_card("<hook>", handle="@you", style="brand")` typesets the card server-side (`POST /v1/renders`), so the line is crisp at any length — same hosted-URL flow. `lib.available_templates()` lists templates and live prices. A brand logo can be uploaded once with `lib.brand_logo("logo.png")` (full-scope key); the returned `logo_id` goes into Voice & Brand Profile §6 and every overlay from then on stamps the real mark.
 
@@ -386,7 +386,7 @@ client.create_comment(post_urn=parsed["post_urn"], message="draft", platform_id=
 # Image side (Pixfaro) — optional, reads PIXFARO_TOKEN from env
 from lib import illustrate
 img = illustrate("Minimal flat-vector lighthouse, calm blue palette", kind="wide")
-# img["url"] -> pass to publish(..., media_urls=[img["url"]])
+# img["url"] -> pass to lib.enqueue_for_review("post", ..., media_urls=[img["url"]])
 ```
 
 ## URL handling

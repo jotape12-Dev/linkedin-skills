@@ -152,7 +152,8 @@ otherwise.
   `GET /v1/key` (verify the configured key: any scope, free — `/v1/models`
   is public and says nothing about the key).
   `illustrate` returns a hosted URL that feeds straight into
-  `lib.publish(..., media_urls=[url])`; `refine` edits by `img_...` id (not URL).
+  `lib.enqueue_for_review("post", ..., media_urls=[url])` (then `lib.publish_approved`);
+  `refine` edits by `img_...` id (not URL).
   `aspect_ratio` must be a ratio like `16:9` (NOT pixel dims). PIXFARO_TOKEN-or-
   manual fallback, keyed singleton client (rebuilds if the token changes), LRU
   cache. `overlay` brand fields come from `references/voice-profile.md` §6.
