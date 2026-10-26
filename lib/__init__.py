@@ -8,6 +8,7 @@ re-exported here.
 from ._env import load_env, utf8_stdio
 from .url_parser import parse_linkedin_url
 from .approval import render_approval_card
+from . import approval_queue
 
 load_env()
 # Approval messages carry emoji; a Windows pipe cannot print them otherwise.
@@ -18,6 +19,8 @@ from .backend_selector import (
     image_backend,
     manual_mode_message,
     publish,
+    enqueue_for_review,
+    publish_approved,
     unpublish,
     repost,
     fetch_post,
@@ -64,10 +67,13 @@ __all__ = [
     "PixfaroClient",
     "PixfaroError",
     "render_approval_card",
+    "approval_queue",
     "active_backend",
     "image_backend",
     "manual_mode_message",
     "publish",
+    "enqueue_for_review",
+    "publish_approved",
     "unpublish",
     "repost",
     "fetch_post",

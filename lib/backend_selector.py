@@ -246,6 +246,134 @@ def publish(
     target_url: str,
     **kwargs: Any,
 ) -> Optional[dict]:
+    """Dispatch a draft to the active backend, optionally gated by the approval queue.
+
+    Without `approved_hash` this is exactly `_dispatch`: nothing changes for
+    existing callers, unless LINKEDIN_SKILLS_REQUIRE_APPROVAL=1 is set, which
+    refuses every call that has no hash (reshare included: it is outside the
+    queue's v1, so it raises ApprovalError there).
+
+    With `approved_hash=<hash>` (from `lib.approval_queue`) the call is sent
+    only if that hash belongs to an *approved* item and the hash recomputed from
+    this very call (kind, network, every destination account, target, post_urn,
+    parent_comment, reaction_type, text, scheduled_time, media_urls) equals it.
+    A kwarg the hash does not cover is refused. The item is moved to `sending`
+    under a file lock BEFORE the dispatch and only the caller that made that
+    move dispatches, so one approval sends once. The outcome is then written as
+    sent / failed / unknown (any exception, KeyboardInterrupt included, leaves
+    at worst `unknown`, which blocks resend until a human reconciles it).
+    Refusals raise `ApprovalError` / `ApprovalMismatch` and send nothing.
+    """
+    from . import approval_queue
+
+    approved_hash = kwargs.pop("approved_hash", None)
+    if approved_hash is None:
+        if approval_queue.approval_required():
+            raise approval_queue.ApprovalError(
+                f"{approval_queue.ENV_REQUIRE} is set: publish needs an approved_hash "
+                "(enqueue the draft and have a human approve it with "
+                "`python3 scripts/approval_queue.py review`). "
+                + ("A reshare is outside the queue's v1 and cannot be sent while this is set."
+                   if kind == "reshare" else "")
+            )
+        return _dispatch(kind, draft_text, target_url, **kwargs)
+
+    item = approval_queue.claim_for_send(
+        approved_hash, kind=kind, draft_text=draft_text, target_url=target_url,
+        require_account=active_backend() == "publora", **kwargs,
+    )
+    try:
+        # One attempt per approval: the client may only repeat a POST that was
+        # certainly not processed (429, or no connection was ever made).
+        with approval_queue.single_attempt():
+            result = _dispatch(kind, draft_text, target_url, **kwargs)
+    except BaseException as exc:
+        approval_queue.record_outcome(item["id"], error=exc)
+        raise
+    approval_queue.record_outcome(item["id"], result=result)
+    return result
+
+
+def enqueue_for_review(
+    kind: PublishKind,
+    text: str,
+    target_url: str,
+    *,
+    post_urn: str = "",
+    parent_comment: str = "",
+    reaction_type: str = "",
+    platform_id: Optional[str] = None,
+    platforms: Optional[list] = None,
+    scheduled_time: Optional[str] = None,
+    media_urls: Optional[list] = None,
+    origin: Optional[dict] = None,
+) -> dict:
+    """Queue a draft for the user to review. The agent's half of the approval flow.
+
+    Takes the same arguments as `publish` (so a skill hands over what it would
+    have published) and stores them with the destination accounts resolved. It
+    sends nothing. Returns the queue item: show its `id` and tell the user to run
+    `python3 scripts/approval_queue.py review` in their own terminal. The agent
+    never runs `review`: approval has to come from a person at a terminal.
+
+    An identical draft already queued, sent or of unknown outcome comes back with
+    `duplicate: True` instead of a second item. `kind` is post, comment or reply;
+    a reshare raises `ApprovalError` (outside the queue's v1).
+    """
+    from . import approval_queue
+
+    accounts = approval_queue.resolve_accounts(kind, platform_id=platform_id, platforms=platforms)
+    return approval_queue.enqueue(
+        kind=kind, text=text, target=target_url, accounts=accounts, post_urn=post_urn,
+        parent_comment=parent_comment, reaction_type=reaction_type,
+        scheduled_time=scheduled_time, media=media_urls, origin=origin,
+    )
+
+
+def publish_approved(item_id: str) -> Optional[dict]:
+    """Send a queued draft, only if the user approved it. The agent's second half.
+
+    Rebuilds the `publish` call from the stored item and passes its approved hash,
+    so the gate re-checks the exact text, accounts, target, parent comment,
+    reaction, schedule and media. Raises `ApprovalError` when the item is still
+    pending, was rejected or edited, or already went out; nothing is sent, and the
+    answer is to ask the user to review, never to work around it. Returns what
+    `publish` returns (manual tier: the copy-paste message).
+    """
+    from . import approval_queue
+
+    item = approval_queue.get(item_id)
+    if item is None:
+        raise approval_queue.ApprovalError(f"no queue item {item_id!r}")
+    if item["status"] != "approved":
+        raise approval_queue.ApprovalError(
+            f"item {item_id} is {item['status']}, not approved; nothing was sent. "
+            "The user approves it by running `python3 scripts/approval_queue.py review` "
+            "in their own terminal."
+        )
+    kind, accounts = item["kind"], item["accounts"]
+    kwargs: dict[str, Any] = {}
+    if kind == "post":
+        kwargs.update(platforms=accounts or None,
+                      scheduled_time=item["scheduled_time"] or None,
+                      media_urls=item["media"] or None)
+    else:
+        if len(accounts) > 1:
+            raise approval_queue.ApprovalError(f"a {kind} goes to one account, item lists {accounts}")
+        kwargs.update(platform_id=accounts[0] if accounts else None,
+                      post_urn=item["post_urn"],
+                      reaction_type=item["reaction_type"] or None)
+        if kind == "reply":
+            kwargs["parent_comment"] = item["parent_comment"]
+    return publish(kind, item["text"], item["target"], approved_hash=item["approval_hash"], **kwargs)
+
+
+def _dispatch(
+    kind: PublishKind,
+    draft_text: str,
+    target_url: str,
+    **kwargs: Any,
+) -> Optional[dict]:
     """Dispatch a draft to the active backend.
 
     One call replaces the 10-line "On approval — adapt to the active backend"

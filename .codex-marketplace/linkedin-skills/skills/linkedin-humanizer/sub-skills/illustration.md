@@ -54,8 +54,11 @@ media. Runs on any agent (Claude Code, Codex, OpenClaw).
 4. **Model choice.** Default `nano-banana-2` (balanced, ~$0.08). The overlay
    handles text, so a cheap base model is fine. Only reach for `gemini-pro-image`
    when the user wants premium art. Never silently upgrade the tier.
-5. **Show + confirm.** Present the returned `url` and `cost`. On approval, attach
-   it when publishing: `publish("post", draft_text, target_url, media_urls=[r["url"]])`.
+5. **Show + confirm.** Present the returned `url` and `cost`, then queue the post
+   with the image attached: `lib.enqueue_for_review("post", draft_text, target_url, media_urls=[r["url"]])`.
+   After the user's terminal review, send it with `lib.publish_approved(<id>)`.
+   Queue and review exactly as in `../../../references/approval-flow.md`; never
+   run `review` yourself.
 6. **Manual mode.** If `r["backend"] == "manual"`, show `r["message"]` (the drafted
    prompt + aspect) and ask for a pasted URL to attach.
 
@@ -93,7 +96,8 @@ the hook line is crisp every time — and the result flows into `publish` exactl
 like an illustration:
 
 ```python
-from lib import quote_card, publish
+import lib
+from lib import quote_card
 r = quote_card(
     "<the pulled hook line, up to 280 chars>",
     handle="@yourhandle",      # or "default" to pull from the brand identity
@@ -101,7 +105,8 @@ r = quote_card(
     size="1:1",                # 1:1 | 4:5 | 16:9 | og
     style="brand",             # or "auto" to rotate looks between cards
 )
-publish("post", draft_text, target_url, media_urls=[r["url"]])
+item = lib.enqueue_for_review("post", draft_text, target_url, media_urls=[r["url"]])
+# the user runs `python3 scripts/approval_queue.py review`, then: lib.publish_approved(item["id"])
 ```
 
 - `style="auto"` deliberately varies palette/layout between consecutive cards
@@ -138,11 +143,13 @@ LinkedIn posts can carry up to 10 images in a grid layout (not a swipeable
 carousel, which the API does not support). Generate a set and attach them all:
 
 ```python
-from lib import illustrate_set, publish
+import lib
+from lib import illustrate_set
 shots = illustrate_set(["scene A prompt", "scene B prompt", "scene C prompt"],
                        kind="wide", overlay={"text": "@handle", "color": "#0A66C2"})
 urls = [s["url"] for s in shots if s.get("url")]
-publish("post", draft_text, target_url, media_urls=urls)
+item = lib.enqueue_for_review("post", draft_text, target_url, media_urls=urls)
+# the user runs `python3 scripts/approval_queue.py review`, then: lib.publish_approved(item["id"])
 ```
 
 `illustrate_set` takes 2-10 prompts and returns a list of `illustrate()` results

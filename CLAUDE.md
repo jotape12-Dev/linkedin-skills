@@ -67,7 +67,8 @@ otherwise.
   When a sender needs the receiver's rules to change, change the receiver and cite
   it from both; two copies of a rule is how two paths quietly stop agreeing.
   Adding a rule anywhere means adding its row to the enforcement table there, or
-  admitting in the row that nothing enforces it yet.
+  admitting in the row that nothing enforces it yet. The approval flow follows
+  this: `references/approval-flow.md` is the one copy, and the skills cite it.
 - Canonical voice rules live at root `references/voice-rules.md`.
   Skill-local "Hard rules" sections must only contain skill-specific
   overrides (char ranges, threading rules, format constraints) and start
@@ -85,6 +86,17 @@ otherwise.
   (post-audit, emoji-detector, detector-tester, rules-explainer) and
   `scripts/` for runnable tools. Don't duplicate this pattern in other
   skills without a clear reason.
+
+## Content rules
+
+### LinkedIn posts (personal brand)
+
+- Voice: senior iOS engineer certifying skills. Never beginner tutorials, never app
+  promotion.
+- Keep posts concise, not over-detailed. Topics must reflect the current iOS release era:
+  check with WebSearch before writing.
+- Every post needs an image. Any terminal or screenshot must be blurred.
+- Publora can schedule up to 7 days ahead. Scheduling the same day is allowed.
 
 ## .claude/skills mirror
 
@@ -124,6 +136,15 @@ otherwise.
   `DELETE /delete-post/<postGroupId>`. Also `post-logs`, `test-connection`,
   `platform-limits` and `webhooks`. Prefer editing a scheduled post over
   delete-and-recreate.
+- **Approval queue (write layer, local):** `lib/approval_queue.py`, CLI
+  `scripts/approval_queue.py`. For posts, comments and replies the three writing
+  skills call `lib.enqueue_for_review(...)` (same arguments as `publish`) and,
+  after the user has run `python3 scripts/approval_queue.py review` in their own
+  terminal, `lib.publish_approved(<id>)`. The agent never runs `review`. The hash
+  gate (`publish(..., approved_hash=...)`) is opt-in per call; reshare is outside
+  it. It is a guard-rail, not a security boundary (see
+  `docs/architecture/approval-queue.md`). The ledger lives in `testing/` or
+  `LINKEDIN_SKILLS_QUEUE_PATH`, never in a tracked folder.
 - **Image layer (Pixfaro):** `lib/pixfaro_client.py`. Skills should call
   `lib.illustrate(prompt, kind=...)` / `lib.refine(image_id, instruction)`
   (or `lib.available_models()`), not the client directly. Endpoints:
@@ -131,7 +152,8 @@ otherwise.
   `GET /v1/key` (verify the configured key: any scope, free — `/v1/models`
   is public and says nothing about the key).
   `illustrate` returns a hosted URL that feeds straight into
-  `lib.publish(..., media_urls=[url])`; `refine` edits by `img_...` id (not URL).
+  `lib.enqueue_for_review("post", ..., media_urls=[url])` (then `lib.publish_approved`);
+  `refine` edits by `img_...` id (not URL).
   `aspect_ratio` must be a ratio like `16:9` (NOT pixel dims). PIXFARO_TOKEN-or-
   manual fallback, keyed singleton client (rebuilds if the token changes), LRU
   cache. `overlay` brand fields come from `references/voice-profile.md` §6.
